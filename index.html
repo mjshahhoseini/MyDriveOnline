@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>K3D viewer — compatibility check</title>
+  <style>
+    :root { --bg:#0b0d10; --fg:#e8eaed; --muted:#9aa0a6; --accent:#8ab4f8; }
+    html,body{height:100%;margin:0}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg);}
+    .wrap{min-height:100%;display:grid;place-items:center;padding:24px;}
+    .card{max-width:1024px;width:100%;background:#121417;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:20px;}
+    h1{margin:0 0 8px;font-size:22px}
+    p{margin:6px 0;color:var(--muted)}
+    .ok{color:#c1fba4}
+    .err{color:#f28b82}
+    iframe{width:100%;height:80vh;border:0;border-radius:12px;background:#fff}
+    ul{margin:8px 0 0 20px}
+    code{background:#1a1d22;color:#e8eaed;padding:1px 6px;border-radius:6px}
+    .footer{margin-top:10px;font-size:12px;color:#7c828b}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>K3D 3D Volume Viewer</h1>
+      <div id="status"></div>
+      <div id="viewer"></div>
+      <div id="help" style="display:none">
+        <p class="err"><strong>No WebGL2 / 3D textures available.</strong> Axes may appear but the volume won’t render.</p>
+        <p><strong>Try one of these:</strong></p>
+        <ul>
+          <li>Open in <strong>Chrome</strong> or <strong>Firefox</strong> on desktop with <em>hardware acceleration</em> enabled.</li>
+          <li>On Safari (macOS/iOS), update to a recent version and ensure WebGL is enabled in <code>Preferences → Advanced</code>.</li>
+          <li>Disable any browser flags like <code>--disable-gpu</code> and restart the browser.</li>
+        </ul>
+        <p>If problems persist, contact the author for a 2D-slices fallback.</p>
+      </div>
+      <div class="footer">This page checks WebGL2 support and then loads the interactive file.</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  function hasWebGL2(){
+    var c = document.createElement('canvas');
+    return !!(c && c.getContext && c.getContext('webgl2'));
+  }
+  function supports3DTexture(){
+    try {
+      var gl = document.createElement('canvas').getContext('webgl2');
+      if(!gl) return false;
+      return !!gl;
+    } catch(e){ return false; }
+  }
+
+  var status = document.getElementById('status');
+  var viewer = document.getElementById('viewer');
+  var help   = document.getElementById('help');
+
+  if (hasWebGL2() && supports3DTexture()){
+    status.innerHTML = '<p class="ok">✓ WebGL2 detected. Loading viewer…</p>';
+    var iframe = document.createElement('iframe');
+    iframe.src = 'plotPerc3.html';  // expects the snapshot file in the same folder
+    viewer.appendChild(iframe);
+  } else {
+    status.innerHTML = '<p class="err">✗ WebGL2 not available on this device/browser.</p>';
+    help.style.display = 'block';
+  }
+})();
+</script>
+</body>
+</html>
