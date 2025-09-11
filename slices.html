@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2D Slice Viewer (Fallback)</title>
+  <style>
+    :root { --bg:#0b0d10; --panel:#121417; --fg:#e8eaed; --muted:#9aa0a6; }
+    html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    .bar { background:var(--panel); padding:10px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+    label { font-size:14px; color:var(--muted); }
+    select, input[type="range"] { accent-color:#8ab4f8; }
+    .flex { display:flex; align-items:center; gap:8px; }
+    .grow { flex:1 }
+    .viewer { height: calc(100vh - 60px); display:grid; place-items:center; padding:8px; }
+    canvas { image-rendering: pixelated; border:1px solid #2a2f39; background:black; max-width:100%; max-height:100%; }
+    .err { color:#f28b82 }
+    .ok  { color:#c1fba4 }
+    .note { color:var(--muted); font-size:12px }
+    .row { display:flex; gap:16px; align-items:center; }
+    .btn { background:#1b222c; border:1px solid #2a2f39; color:var(--fg); padding:6px 10px; border-radius:8px; cursor:pointer; }
+    .btn:hover { background:#222a36 }
+    iframe#src { display:none; width:0; height:0; border:0; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <div class="row">
+      <div class="flex">
+        <label for="axis">Axis</label>
+        <select id="axis">
+          <option value="z" selected>Z (XY slice)</option>
+          <option value="y">Y (XZ slice)</option>
+          <option value="x">X (YZ slice)</option>
+        </select>
+      </div>
+      <div class="flex grow">
+        <label for="slice">Slice</label>
+        <input id="slice" type="range" min="0" max="0" value="0" class="grow">
+        <span id="sliceVal">0</span>
+      </div>
+      <div class="flex">
+        <button id="link3d" class="btn">Open 3D Viewer</button>
+      </div>
+    </div>
+    <div id="status" class="note">Loading volume from <code>plotPerc3.html</code>…</div>
+  </div>
+  <div class="viewer">
+    <canvas id="c" width="512" height="512"></canvas>
+  </div>
+
+  <!-- hidden iframe to read k3dCompressed from same origin -->
+  <iframe id="src" src="plotPerc3.html"></iframe>
+
+  <!-- fflate for decompression -->
+  <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
+  <script>
+  function decompressToJSON(k3dCompressed) {
+    const u8 = fflate.strToU8(k3dCompressed);
+    const out = fflate.decompressSync(u8);
+    const json = new TextDecoder().decode(out);
+    return JSON.parse(json);
+  }
+
+  function findVolumeLike(snapshot) {
+    if (snapshot && Array.isArray(snapshot.objects)) {
+      for (const obj of snapshot.objects) {
+        const t = (obj.type || obj.object_type || '').toLowerCase();
+        if (t.includes('volume')) return obj;
+      }
+    }
+    let found = null;
+    (function walk(x){
+      if (!x || typeof x !== 'object' || found) return;
+      if (('voxels' in x) || ('volume' in x) || ('data' in x && ('shape' in x || 'grid' in x))) { found = x; return; }
+      for (const k in x) walk(x[k]);
+    })(snapshot);
+    return found;
+  }
+
+  function decodeArrayMaybe(obj) {
+    if (!obj) return null;
+    if (obj.data && obj.shape) {
+      // base64 numeric buffer (Uint8Array) -> typed array by dtype
+      const b64 = obj.data;
+      const raw = atob(b64);
+      const buf = new Uint8Array(raw.length);
+      for (let i=0;i<raw.length;i++) buf[i] = raw.charCodeAt(i);
+      let arr;
+      if (obj.dtype && obj.dtype.includes('float32')) arr = new Float32Array(buf.buffer);
+      else if (obj.dtype && obj.dtype.includes('uint16')) arr = new Uint16Array(buf.buffer);
+      else arr = new Uint8Array(buf.buffer);
+      return {array: arr, shape: obj.shape};
+    }
+    if (obj.voxels && (obj.voxels_shape || obj.shape)) {
+      const shape = obj.voxels_shape || obj.shape;
+      const vox = obj.voxels;
+      return {array: Array.isArray(vox) ? Float32Array.from(vox) : vox, shape};
+    }
+    return null;
+  }
+
+  function reshapeGetter(flat, shape) {
+    const [nx, ny, nz] = shape;
+    return (x,y,z) => flat[x*ny*nz + y*nz + z] || 0;
+  }
+
+  function normalizeToGray(vals) {
+    let min=Infinity, max=-Infinity;
+    for (let v of vals) { if (v<min) min=v; if (v>max) max=v; }
+    const rng = (max-min) || 1;
+    return vals.map(v => Math.round(255*(v-min)/rng));
+  }
+
+  function draw(canvas, gray, w, h){
+    const ctx = canvas.getContext('2d');
+    canvas.width = w; canvas.height = h;
+    const img = ctx.createImageData(w,h);
+    for (let i=0;i<w*h;i++){
+      const j = 4*i; const v = gray[i];
+      img.data[j]=v; img.data[j+1]=v; img.data[j+2]=v; img.data[j+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+  }
+
+  async function main(){
+    const status = document.getElementById('status');
+    const axisEl = document.getElementById('axis');
+    const slider = document.getElementById('slice');
+    const sliceVal = document.getElementById('sliceVal');
+    const canvas = document.getElementById('c');
+    const link3d = document.getElementById('link3d');
+    link3d.onclick = () => location.href = 'index.html';
+
+    try {
+      // Prefer reading via iframe global
+      const frame = document.getElementById('src');
+      await new Promise((res, rej) => {
+        frame.onload = () => res();
+        frame.onerror = () => rej(new Error('Failed to load plotPerc3.html'));
+      });
+      const win = frame.contentWindow;
+      let snapshot;
+      if (win && win.k3dCompressed) {
+        snapshot = decompressToJSON(win.k3dCompressed);
+      } else {
+        // Fallback: fetch the HTML and regex the blob
+        const text = await fetch('plotPerc3.html', {cache:'no-store'}).then(r=>r.text());
+        const m = text.match(/window\.k3dCompressed\s*=\s*'([^']+)'/);
+        if (!m) throw new Error('k3dCompressed not found in snapshot.');
+        snapshot = decompressToJSON(m[1]);
+      }
+
+      const vol = findVolumeLike(snapshot);
+      if (!vol) throw new Error('No volume object found in snapshot.');
+      let decoded = decodeArrayMaybe(vol) ||
+                    (vol.volume && decodeArrayMaybe(vol.volume));
+      if (!decoded) throw new Error('Could not decode voxel array from snapshot.');
+
+      let shape = decoded.shape.map(v => parseInt(v,10));
+      if (shape.length !== 3) throw new Error('Volume shape is not 3D.');
+      let [nx,ny,nz] = shape;
+      let flat = decoded.array instanceof Float32Array ? decoded.array : Float32Array.from(decoded.array);
+      if (flat.length !== nx*ny*nz) {
+        throw new Error(`Flat length ${flat.length} != nx*ny*nz ${nx*ny*nz}`);
+      }
+
+      status.innerHTML = `<span class="ok">✓ Volume loaded.</span> Shape: ${nx}×${ny}×${nz}`;
+      const get = reshapeGetter(flat, [nx,ny,nz]);
+
+      function updateSlider(){
+        const ax = axisEl.value;
+        const max = (ax==='z') ? nz-1 : (ax==='y' ? ny-1 : nx-1);
+        slider.max = String(max);
+        if (+slider.value > max) slider.value = String(Math.floor(max/2));
+        sliceVal.textContent = slider.value;
+      }
+      function render(){
+        const ax = axisEl.value;
+        const idx = +slider.value;
+        sliceVal.textContent = String(idx);
+        let w,h,data=[];
+        if (ax==='z'){ w=nx; h=ny; for (let y=0;y<ny;y++) for (let x=0;x<nx;x++) data.push(get(x,y,idx)); }
+        else if (ax==='y'){ w=nx; h=nz; for (let z=0;z<nz;z++) for (let x=0;x<nx;x++) data.push(get(x,idx,z)); }
+        else { w=ny; h=nz; for (let z=0;z<nz;z++) for (let y=0;y<ny;y++) data.push(get(idx,y,z)); }
+        draw(canvas, normalizeToGray(data), w, h);
+      }
+      axisEl.addEventListener('change', ()=>{ updateSlider(); render(); });
+      slider.addEventListener('input', render);
+      updateSlider(); render();
+    } catch (err) {
+      status.className = 'err';
+      status.textContent = 'Error: ' + err.message + ' — If this persists, I can wire a direct data dump (NPY/JSON) from the Python export for universal viewing.';
+      console.error(err);
+    }
+  }
+  main();
+  </script>
+</body>
+</html>
