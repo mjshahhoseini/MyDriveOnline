@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>2D Slice Viewer (Fallback)</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; background: #0b0d10; color: #eee; }
+    .controls { padding: 10px; background: #121417; display: flex; align-items: center; gap: 10px; }
+    .viewer { display: flex; justify-content: center; align-items: center; height: calc(100vh - 60px); }
+    canvas { border: 1px solid #444; background: black; max-width: 100%; max-height: 100%; }
+    label { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <label for="axis">Axis:</label>
+    <select id="axis">
+      <option value="z">Z (XY slice)</option>
+      <option value="y">Y (XZ slice)</option>
+      <option value="x">X (YZ slice)</option>
+    </select>
+    <label for="slice">Slice:</label>
+    <input id="slice" type="range" min="0" max="99" value="50">
+    <span id="sliceValue">50</span>
+  </div>
+  <div class="viewer">
+    <canvas id="canvas" width="512" height="512"></canvas>
+  </div>
+
+  <script>
+    // Placeholder 3D array (replace with your real data)
+    // For demonstration we just generate a synthetic 3D blob
+    const size = 100;
+    let volume = new Array(size).fill(0).map(() =>
+      new Array(size).fill(0).map(() =>
+        new Array(size).fill(0)
+      )
+    );
+
+    // Example synthetic volume: sphere density
+    for (let x=0;x<size;x++){
+      for (let y=0;y<size;y++){
+        for (let z=0;z<size;z++){
+          let dx = x-size/2, dy=y-size/2, dz=z-size/2;
+          let r = Math.sqrt(dx*dx+dy*dy+dz*dz);
+          volume[x][y][z] = r < size/3 ? 255-Math.floor(r*4) : 0;
+        }
+      }
+    }
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const sliceInput = document.getElementById("slice");
+    const sliceValue = document.getElementById("sliceValue");
+    const axisSelect = document.getElementById("axis");
+
+    function drawSlice(axis, index) {
+      let img = ctx.createImageData(size, size);
+      let data = img.data;
+      for (let i=0;i<size;i++){
+        for (let j=0;j<size;j++){
+          let val;
+          if (axis==="z") val = volume[i][j][index];
+          if (axis==="y") val = volume[i][index][j];
+          if (axis==="x") val = volume[index][i][j];
+          let idx = 4*(i*size+j);
+          data[idx] = val;
+          data[idx+1] = val;
+          data[idx+2] = val;
+          data[idx+3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+
+    function update(){
+      let axis = axisSelect.value;
+      let slice = parseInt(sliceInput.value);
+      sliceValue.textContent = slice;
+      drawSlice(axis, slice);
+    }
+
+    sliceInput.addEventListener("input", update);
+    axisSelect.addEventListener("change", update);
+
+    update(); // initial draw
+  </script>
+</body>
+</html>
